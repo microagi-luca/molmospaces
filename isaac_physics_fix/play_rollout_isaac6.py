@@ -175,6 +175,15 @@ if MODE == "snapshot":
     app.close()
     os._exit(0)
 else:
+    # frame the viewport camera on the robot+drawer (a fresh stage's default camera may
+    # point at nothing -> black/empty view for the streaming client)
+    try:
+        from isaacsim.core.utils.viewports import set_camera_view
+
+        set_camera_view(eye=[1.9, -1.5, 1.3], target=[0.15, 0.0, 0.5])
+        print(">>> viewport camera framed", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(">>> camera set failed (navigate manually with mouse):", e, flush=True)
     print(">>> STREAM READY — connect the WebRTC client to " + PUBLIC_IP, flush=True)
     loop = 0
     while app.is_running():
