@@ -204,7 +204,8 @@ else:
     try:
         from isaacsim.core.utils.viewports import set_camera_view
 
-        eye = [2.35, -0.45, 1.75] if KITCHEN else [1.9, -1.5, 1.3]
+        # keep the eye well inside the room (walls at x≈±2.5, y≈-2.9..2.56)
+        eye = [1.85, -0.75, 1.45] if KITCHEN else [1.9, -1.5, 1.3]
         tgt = [0.95, -2.1, 0.55] if KITCHEN else [0.15, 0.0, 0.5]
         set_camera_view(eye=eye, target=tgt)
         print(">>> viewport camera framed", flush=True)
