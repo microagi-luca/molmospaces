@@ -101,3 +101,42 @@ uv pip install -b /tmp/build_constraints.txt --index-strategy unsafe-best-match 
 Run headless with `OMNI_KIT_ACCEPT_EULA=YES python -u <script>` (use `-u`; output is
 otherwise block-buffered). A **pixi** equivalent can be authored from the same package
 list if a conda-based, fully-locked environment is preferred.
+
+---
+
+## Addendum (2026-06-11, part 2)
+
+### Reproduced & fixed: the README "collision groups reverted" issue
+
+Upstream's README warns that "collision groups are reverted by default when using
+IsaacLab's `InteractiveScene`". Root cause found and reproduced
+(`repro_interactive_scene_collisions.py`, modes `repro`/`fixed`):
+
+- `GridCloner.filter_collisions()` sets `PhysxSceneAPI.invertCollisionGroupFilter = True`
+  (cloner.py:446); Isaac Lab's `InteractiveScene` calls it **unconditionally on CPU device**
+  (interactive_scene.py:214).
+- Inversion flips `filteredGroups` semantics from "do NOT collide" to "ONLY these collide",
+  wrecking the scene's authored structural/articulable filtering: embedded furniture starts
+  colliding with its enclosing counters (jams) and stops colliding with everything else.
+- **Repro numbers (FloorPlan1)**: drawer 0.2% open = JAMMED (vs 95.2% direct-load);
+  cabinet door self-opens 1.09 rad during a passive settle.
+- **Fix (2 lines, before `sim.reset()`)**: set `invertCollisionGroupFilter = False` and
+  deactivate the cloner's `/World/collisions/*` groups. Restores exact direct-load behavior
+  (drawer 95.2%, cabinets 100%/99.9%, zero drift). Upstream's PR#16 workaround instead locks
+  all articulation joints + collapses collision groups — functional furniture is lost.
+- Multi-env note: with `env_spacing` larger than the scene, inter-env contact is impossible,
+  so dropping the cloner filtering is safe (the same reason Arena's `collision_group=0` works).
+
+### Isaac Sim 6.0: Blackwell rendering works (5.1 crash confirmed fixed)
+
+- Isaac Sim **5.1**'s RTX renderer crashes on RTX PRO 6000 Blackwell (known NVIDIA issue;
+  viewport Hydra-engine segfault). Physics is unaffected.
+- The **pip** `isaacsim[all]==6.0.0` early release is missing `isaacsim.anim.robot.schema`,
+  blocking every experience. The **official standalone zip** is complete:
+  `https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-6.0.0-linux-x86_64.zip`
+  (needs Python 3.12 if used via pip; standalone bundles its own).
+- With the standalone, headless RTX rendering on Blackwell works: `isaac6_smoke.py`
+  (cube render) and `isaac6_render_scene.py` (loads the converted scene, authors OPEN
+  drive targets on drawer/cabinet joints, captures RGB via Replicator, writes MP4).
+- Result videos: `videos/fp1_isaac_open.mp4` — Isaac-rendered iTHOR kitchen with the
+  drawer stack sliding open and cabinet doors swinging.
