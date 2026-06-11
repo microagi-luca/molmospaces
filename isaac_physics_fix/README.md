@@ -140,3 +140,30 @@ IsaacLab's `InteractiveScene`". Root cause found and reproduced
   drive targets on drawer/cabinet joints, captures RGB via Replicator, writes MP4).
 - Result videos: `videos/fp1_isaac_open.mp4` — Isaac-rendered iTHOR kitchen with the
   drawer stack sliding open and cabinet doors swinging.
+
+---
+
+## Addendum (2026-06-11, part 3): RL MVP — PPO learns to open the MolmoSpaces drawer
+
+End-to-end RL pipeline validated in Isaac Lab (5.1 venv, headless GPU PhysX, no cameras):
+
+- `extract_drawer_asset.py` — pulls one drawer articulation out of the converted FloorPlan1
+  kitchen into a standalone, **clone-safe** USD (`~/assets_rl/molmo_drawer.usda`): strips the
+  authored `FixedJointToWorld` frames so omni.physx auto-computes per-clone anchors (the
+  Franka `root_joint` pattern), and bakes the re-centering shift on the `_art` child prim
+  (the spawner overwrites the asset root's transform — a root-level shift is silently lost).
+- `train_molmo_drawer.py` — Direct-workflow env (surgical adaptation of
+  `isaaclab_tasks.direct.franka_cabinet`) + rsl_rl PPO with the stock FrankaCabinet
+  hyperparameters. Franka + the MolmoSpaces drawer, 2048 envs on GPU.
+  The iTHOR drawer is **handle-less**, so the grasp targets a top-hook: fingertips dip over
+  the rim behind the front panel and pull (frontal handle-grasp shaping never opens it).
+- Physics probes inside the env: per-clone anchors hold (4/4 envs identical, stable);
+  written joint state holds; a 60 N world-frame pull slides the drawer (0 → 0.122 m).
+
+**Learning curve (2048 envs, 400 iterations, 13.1M steps in 2m53s):**
+
+| iteration | ~0 | ~80 | ~160 | ~240 | ~320 | 400 |
+|---|---|---|---|---|---|---|
+| drawer open (frac of 0.319 m travel, episode-mean) | 0.000 | 0.104 | 0.200 | 0.278 | 0.389 | **0.546** |
+
+Mean reward 663 (reach-only baseline) → **2290**. Checkpoints in `~/rl_logs/molmo_drawer/` on the VM.
