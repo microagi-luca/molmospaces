@@ -43,8 +43,8 @@ sun = UsdLux.DistantLight.Define(stage, "/World/Sun")
 sun.CreateIntensityAttr(3000.0)
 UsdGeom.Xformable(sun).AddRotateXYZOp().Set(Gf.Vec3f(-35, 15, 0))
 
-# author OPEN drive targets on drawer + cabinet joints (maximal-coordinate; no Isaac Lab)
-n_driven = 0
+# author drives at CLOSED targets; we ramp them open DURING capture so the motion is visible
+driven = []  # (target_attr, open_value)
 for prim in stage.Traverse():
     name = prim.GetName().lower()
     if prim.IsA(UsdPhysics.PrismaticJoint) and "drawer" in name:
@@ -55,9 +55,9 @@ for prim in stage.Traverse():
         d.CreateStiffnessAttr(3000.0)
         d.CreateDampingAttr(200.0)
         d.CreateMaxForceAttr(1.0e6)
-        d.CreateTargetPositionAttr(float(hi))
-        n_driven += 1
-    elif prim.IsA(UsdPhysics.RevoluteJoint) and ("cabinet" in name or "fridge" in name.lower()):
+        attr = d.CreateTargetPositionAttr(0.0)
+        driven.append((attr, float(hi)))
+    elif prim.IsA(UsdPhysics.RevoluteJoint) and ("cabinet" in name or "fridge" in name):
         j = UsdPhysics.RevoluteJoint(prim)
         lo, hi = j.GetLowerLimitAttr().Get() or 0.0, j.GetUpperLimitAttr().Get() or 0.0
         tgt = hi if abs(hi) >= abs(lo) else lo
@@ -66,9 +66,19 @@ for prim in stage.Traverse():
         d.CreateStiffnessAttr(3000.0)
         d.CreateDampingAttr(200.0)
         d.CreateMaxForceAttr(1.0e6)
-        d.CreateTargetPositionAttr(float(tgt))
-        n_driven += 1
-log(f"authored OPEN drives on {n_driven} joints")
+        attr = d.CreateTargetPositionAttr(0.0)
+        driven.append((attr, float(tgt)))
+log(f"authored drives (closed) on {len(driven)} joints; will ramp open during capture")
+
+HOLD_CLOSED, RAMP = 30, 150  # frames: closed-hold, then smooth open, then hold open
+
+
+def set_drive_progress(frame_idx):
+    t = (frame_idx - HOLD_CLOSED) / float(RAMP)
+    t = max(0.0, min(1.0, t))
+    a = t * t * (3 - 2 * t)  # smoothstep
+    for attr, open_val in driven:
+        attr.Set(a * open_val)
 
 cam = rep.create.camera(position=tuple(CAM[:3]), look_at=tuple(CAM[3:]), focal_length=16.0)
 rp = rep.create.render_product(cam, (1280, 720))
@@ -85,6 +95,7 @@ import imageio.v2 as imageio
 
 frames = []
 for i in range(N_FRAMES):
+    set_drive_progress(i)
     app.update()
     arr = np.asarray(rgb.get_data())
     if arr.ndim == 3 and arr.shape[-1] >= 3:
