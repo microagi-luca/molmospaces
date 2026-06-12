@@ -138,6 +138,30 @@ bx.AddTranslateOp().Set(Gf.Vec3d(-0.20, 0.0, 0.633))
 bx.AddScaleOp().Set(Gf.Vec3f(0.215, 0.28, 0.015))
 UsdPhysics.CollisionAPI.Apply(blk.GetPrim())
 
+# ---------- match the TRAINING physics config (marginality is a sim-config mismatch) ----------
+from pxr import PhysxSchema, Usd, UsdShade
+
+# 1) Franka solver iterations: Isaac Lab trained with 12/1 for stable contact; PhysX default
+#    (~4) makes a contact grasp slip -> run-to-run variance.
+_pa = PhysxSchema.PhysxArticulationAPI.Apply(franka)
+_pa.CreateSolverPositionIterationCountAttr(12)
+_pa.CreateSolverVelocityIterationCountAttr(1)
+# 2) friction-1.0 material (the training SimulationCfg default) on the contact surfaces
+_pm = UsdShade.Material.Define(stage, "/World/PhysMat")
+_pmapi = UsdPhysics.MaterialAPI.Apply(_pm.GetPrim())
+_pmapi.CreateStaticFrictionAttr(1.0)
+_pmapi.CreateDynamicFrictionAttr(1.0)
+_pmapi.CreateRestitutionAttr(0.0)
+_nbound = 0
+for _root in ("/World/Drawer", "/World/Ground", "/World/Blocker"):
+    for _p in Usd.PrimRange(stage.GetPrimAtPath(_root)):
+        if _p.HasAPI(UsdPhysics.CollisionAPI):
+            UsdShade.MaterialBindingAPI.Apply(_p).Bind(
+                _pm, bindingStrength=UsdShade.Tokens.weakerThanDescendants, materialPurpose="physics"
+            )
+            _nbound += 1
+log(f"applied solver iters 12/1 + friction 1.0 material to {_nbound} colliders")
+
 # ---------- physics ----------
 if MODE == "stream":
     # Streaming kit + SimulationContext corrupt each other's physics handles. Use ONLY the
@@ -359,7 +383,7 @@ def run_episode(capture=False):
             app.update()  # one rendering_dt block = decimation physics steps + WebRTC frame
         else:
             sim.step(render=False)
-            sim.step(render=True)
+            sim.step(render=(MODE == "snapshot"))
         if s in (0, 30, 80, 150, 260, 399, 499):
             tt = obs[18:21]
             log(f"step {s}: drawer={djp:.4f} ({djp/DRAWER_TRAVEL*100:.0f}%) "
@@ -370,6 +394,20 @@ def run_episode(capture=False):
                 frames[s] = arr[..., :3].astype(np.uint8)
     return frames, maxd
 
+
+if MODE == "bench":
+    import statistics
+
+    res = []
+    for ep in range(6):
+        reset_episode()
+        _, maxd = run_episode(capture=False)
+        pct = maxd / DRAWER_TRAVEL * 100
+        res.append(pct)
+        log(f"bench ep {ep}: max drawer {maxd:.4f} m = {pct:.1f}%")
+    log(f"BENCH %: {[round(r, 1) for r in res]}  min={min(res):.1f} mean={statistics.mean(res):.1f}")
+    app.close()
+    os._exit(0)
 
 if MODE == "snapshot":
     reset_episode()

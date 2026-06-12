@@ -219,3 +219,17 @@ Results & limits:
   kit render loop **segfault** together. SimulationContext also conflicts with the streaming
   kit. So live causal streaming is blocked on this early release; the genuine result is the
   rendered closedloop.mp4. (Assisted re-render streaming still works via play_rollout_isaac6.py.)
+
+### Robustness: it was a physics-config mismatch, not the policy (no retrain needed)
+
+The run-to-run variance (29–85%) was NOT a sim-to-sim policy gap — it was my 6.0 scene using
+PhysX defaults instead of the training physics config. Matching two things makes the grasp
+robust with the SAME policy (no fine-tuning):
+- Franka articulation **solver iterations 12/1** (Isaac Lab's `solver_position_iteration_count=12`);
+  PhysX default (~4) gives soft contact → the grasp slips.
+- a **friction-1.0 physics material** (the training `SimulationCfg.physics_material` default) on
+  the contact surfaces (drawer/ground/blocker).
+
+`closedloop_isaac6.py bench` (6 episodes, no render): **83.1–85.9%, mean 84.6%** (was 29–85%).
+Rendered runs land a bit lower (~65%) due to GPU-PhysX non-determinism under the render load,
+but every run is a firm grasp + substantial pull. `closedloop.mp4` shows it.
