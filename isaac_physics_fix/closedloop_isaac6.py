@@ -139,9 +139,40 @@ bx.AddScaleOp().Set(Gf.Vec3f(0.215, 0.28, 0.015))
 UsdPhysics.CollisionAPI.Apply(blk.GetPrim())
 
 # ---------- physics ----------
-sim = SimulationContext(physics_dt=PHYS_DT, rendering_dt=DT, backend="numpy")
-sim.reset()
-log("SimulationContext ready, device:", sim.get_physics_dt())
+if MODE == "stream":
+    # Streaming kit + SimulationContext corrupt each other's physics handles. Use ONLY the
+    # kit timeline + app.update() (the path that streams reliably), with an explicit physics
+    # scene, then grab tensor handles once the kit is fully loaded and physics is attached.
+    sim = None
+    from pxr import PhysxSchema
+
+    _scene = UsdPhysics.Scene.Define(stage, "/World/physicsScene")
+    _scene.CreateGravityDirectionAttr().Set(Gf.Vec3f(0, 0, -1))
+    _scene.CreateGravityMagnitudeAttr().Set(9.81)
+    PhysxSchema.PhysxSceneAPI.Apply(_scene.GetPrim()).CreateTimeStepsPerSecondAttr(120)
+    import omni.timeline
+
+    _timeline = omni.timeline.get_timeline_interface()
+    for _ in range(30):
+        app.update()  # let the streaming kit fully load
+    _timeline.play()
+    for _ in range(20):
+        app.update()  # attach + run physics
+else:
+    sim = SimulationContext(physics_dt=PHYS_DT, rendering_dt=DT, backend="numpy")
+    sim.reset()
+    for _ in range(40):
+        sim.step(render=False)
+
+
+def step_phys():
+    if MODE == "stream":
+        app.update()
+    else:
+        sim.step(render=False)
+
+
+log("physics ready + warmed up")
 
 import omni.physics.tensors as tensors
 
@@ -218,7 +249,7 @@ except Exception as e:  # noqa: BLE001
     log("set_dof_positions unavailable:", e)
 robot_av.set_dof_position_targets(init_q_physx.copy(), np.array([0]))
 for _ in range(30):
-    sim.step(render=False)
+    step_phys()
 
 # robot_dof_targets accumulator (env starts at zeros, in training order)
 robot_dof_targets_t = np.zeros(9)
@@ -307,7 +338,7 @@ def reset_episode():
     robot_av.set_dof_position_targets(init_q_physx.copy(), np.array([0]))
     robot_dof_targets_t = np.zeros(9)
     for _ in range(5):
-        sim.step(render=False)
+        step_phys()
 
 
 def run_episode(capture=False):
@@ -324,24 +355,29 @@ def run_episode(capture=False):
         )
         tgt_physx = robot_dof_targets_t[t2p][None, :]
         robot_av.set_dof_position_targets(tgt_physx, np.array([0]))
-        sim.step(render=False)
-        sim.step(render=True)
+        if MODE == "stream":
+            app.update()  # one rendering_dt block = decimation physics steps + WebRTC frame
+        else:
+            sim.step(render=False)
+            sim.step(render=True)
         if s in (0, 30, 80, 150, 260, 399, 499):
             tt = obs[18:21]
             log(f"step {s}: drawer={djp:.4f} ({djp/DRAWER_TRAVEL*100:.0f}%) "
                 f"|to_target|={np.linalg.norm(tt):.3f} |a|={np.linalg.norm(a):.2f}")
-        if capture and s in (5, 150, 260, n - 2):
+        if capture:
             arr = np.asarray(rgb.get_data())
-            frames[s] = arr[..., :3].astype(np.uint8)
+            if arr.ndim == 3 and arr.shape[-1] >= 3:
+                frames[s] = arr[..., :3].astype(np.uint8)
     return frames, maxd
 
 
 if MODE == "snapshot":
     reset_episode()
     frames, maxd = run_episode(capture=True)
-    for s, f in frames.items():
-        imageio.imwrite(f"/tmp/molmo_isaac6/cl_{s:03d}.png", f)
-        log(f"wrote cl_{s:03d}.png")
+    seq = [frames[k] for k in sorted(frames)]
+    imageio.mimwrite("/tmp/molmo_isaac6/closedloop.mp4", seq, fps=30, quality=8)
+    imageio.imwrite("/tmp/molmo_isaac6/closedloop_open.png", seq[-1])
+    log(f"wrote closedloop.mp4 ({len(seq)} frames)")
     log(f"CLOSED-LOOP RESULT: max drawer {maxd:.4f} m = {maxd / DRAWER_TRAVEL * 100:.1f}% of travel")
     log("SNAPSHOT_OK")
     app.close()

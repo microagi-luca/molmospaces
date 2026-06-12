@@ -193,3 +193,29 @@ The isolation->in-scene gap is CLOSED. Chain of fixes, each verified:
 
 Artifacts: `trained/model_1999_handle.pt` (in-context policy), `trained/rollout_kitchen.npz`
 (in-kitchen closed-loop trajectory), `trained/molmo_drawer.usda` (asset with handle).
+
+---
+
+## Addendum (2026-06-12, part 2): native closed-loop policy in Isaac Sim 6.0
+
+`closedloop_isaac6.py` runs the trained PPO policy LIVE on real GPU-PhysX in Isaac Sim 6.0
+with **no Isaac Lab** (which doesn't support 6.0): policy = pure-numpy MLP from
+`policy_weights.npz`; articulations read/driven via `omni.physics.tensors`; obs(23)/action(9)
+replicate the env exactly. The gripper **physically grasps the handle and pulls the drawer
+via causal contact + feedback** — not assisted, not a kinematic re-render.
+
+Hard-won details:
+- Must set the Franka drive gains to Isaac Lab's actuator values (stiff 80/2000, damp 4/100,
+  effort 87/12/200); the raw USD ships different defaults and the policy won't transfer.
+- `omni.physics.tensors.create_simulation_view` needs the explicit `stage_id`.
+- DOF/link order from PhysX matches the training order here (no remap needed); grasp frame
+  replicated from link7/finger poses.
+
+Results & limits:
+- `snapshot` mode (default kit) is solid → renders `closedloop.mp4`. Verified causal opening,
+  but the 5.1-trained policy transfers only **marginally** to 6.0's newer PhysX (+ GPU PhysX
+  non-determinism), so the opened fraction varies run-to-run (~29%–85%); it always grabs+pulls.
+- `stream` mode (live WebRTC): the PhysX-tensor control loop + the 6.0 early-release streaming
+  kit render loop **segfault** together. SimulationContext also conflicts with the streaming
+  kit. So live causal streaming is blocked on this early release; the genuine result is the
+  rendered closedloop.mp4. (Assisted re-render streaming still works via play_rollout_isaac6.py.)
