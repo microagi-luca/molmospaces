@@ -140,6 +140,28 @@ def Xform "MolmoDrawer"
                 custom float physxJoint:armature = 0.05
                 custom float physxJoint:jointFriction = 1.5
             }
+
+            def Cube "drawer_372d9ee41d70550432c30a66a6e5b331_1_1_0_front_collision" (
+                apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                uniform token purpose = "guide"
+                double size = 2
+                float3 xformOp:scale = (0.24, 0.074995, 0.004)
+                double3 xformOp:translate = (0, -0.024995001032948494, 0.020999999716877937)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            }
+
+            def Cube "drawer_372d9ee41d70550432c30a66a6e5b331_1_1_0_handle_collision" (
+                apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                uniform token purpose = "guide"
+                double size = 2
+                float3 xformOp:scale = (0.084, 0.0125, 0.015)
+                double3 xformOp:translate = (0, 0.015000000745058056, 0.03699999988079071)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            }
         }
 
         def Xform "drawer_372d9ee41d70550432c30a66a6e5b331_1_2_0" (

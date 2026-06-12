@@ -377,33 +377,77 @@ class MolmoDrawerEnv(DirectRLEnv):
         )
 
 
-# ------------------------------- training -------------------------------
+# --------------- closed-loop policy evaluation INSIDE the kitchen ---------------
+import glob
+import numpy as np
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 from rsl_rl.runners import OnPolicyRunner
-
 from isaaclab_tasks.direct.franka_cabinet.agents.rsl_rl_ppo_cfg import FrankaCabinetPPORunnerCfg
 
+KITCHEN_USD = os.path.expanduser('~/reconvert_fixed/FloorPlan1_physics/scene.usda')
+ART = 'drawer_372d9ee41d70550432c30a66a6e5b331_1_0_0_art'
+
+class KitchenEvalEnv(MolmoDrawerEnv):
+    def _setup_scene(self):
+        # spawn the kitchen ROTATED into the training frame: drawer slider at the origin,
+        # opening toward +X — the policy's world-frame observations stay in-distribution
+        cfg = sim_utils.UsdFileCfg(usd_path=KITCHEN_USD)
+        cfg.func('/World/envs/env_0/Scene', cfg,
+                 translation=(2.19, 0.95, 0.0),
+                 orientation=(0.7071068, 0.0, 0.0, -0.7071068))
+        self._robot = Articulation(self.cfg.robot)
+        self._cabinet = Articulation(self.cfg.cabinet)
+        self.scene.articulations['robot'] = self._robot
+        self.scene.articulations['cabinet'] = self._cabinet
+        self.scene.clone_environments(copy_from_source=False)
+        if self.device == 'cpu':
+            self.scene.filter_collisions(global_prim_paths=[])
+        # our InteractiveScene fix: restore authored collision-group semantics
+        import omni.usd as _ou
+        from pxr import PhysxSchema as _Px, UsdPhysics as _Up
+        stage = _ou.get_context().get_stage()
+        physx = _Px.PhysxSceneAPI(stage.GetPrimAtPath(str(self.scene.physics_scene_path)))
+        physx.GetInvertCollisionGroupFilterAttr().Set(False)
+        n = 0
+        for p in list(stage.Traverse()):
+            if p.IsA(_Up.CollisionGroup) and '/collisions' in p.GetPath().pathString.lower():
+                p.SetActive(False); n += 1
+        print(f'>>> collision fix applied (invert off, {n} cloner groups disabled)', flush=True)
+        light = sim_utils.DomeLightCfg(intensity=2000.0)
+        light.func('/World/Light', light)
+
 env_cfg = MolmoDrawerEnvCfg()
-env_cfg.scene.num_envs = args.num_envs
-if args.smoke:
-    env_cfg.scene.num_envs = 8
+env_cfg.scene.num_envs = 1
+env_cfg.sim.device = 'cpu'
+# robot stays at its native training pose — the kitchen was rotated to match
+env_cfg.cabinet.prim_path = '/World/envs/env_.*/Scene/Geometry/' + ART
+env_cfg.cabinet.spawn = None
+raw = KitchenEvalEnv(cfg=env_cfg)
+env = RslRlVecEnvWrapper(raw)
+CKPT = sorted(glob.glob(os.path.expanduser('~/rl_logs/molmo_drawer/model_*.pt')), key=lambda p: int(p.split('_')[-1].split('.')[0]))[-1]
+agent_cfg = FrankaCabinetPPORunnerCfg(); agent_cfg.experiment_name='molmo_drawer'; agent_cfg.device='cpu'
+runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device='cpu')
+runner.load(CKPT); policy = runner.get_inference_policy(device=env.device)
+print('>>> policy:', CKPT, flush=True)
 
-env = MolmoDrawerEnv(cfg=env_cfg)
-print(f">>> ENV READY: {env.num_envs} envs, device={env.device}", flush=True)
-print(f">>> drawer joints: {env._cabinet.joint_names}", flush=True)
-print(f">>> drawer bodies: {env._cabinet.body_names}", flush=True)
-
-env = RslRlVecEnvWrapper(env)
-agent_cfg = FrankaCabinetPPORunnerCfg()
-agent_cfg.experiment_name = "molmo_drawer"
-agent_cfg.max_iterations = 2 if args.smoke else args.max_iterations
-
-log_dir = os.path.expanduser("~/rl_logs/molmo_drawer")
-os.makedirs(log_dir, exist_ok=True)
-runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
-runner.save(os.path.join(log_dir, "final_checkpoint.pt"))
-print(">>> TRAINING DONE", flush=True)
-env.close()
-simulation_app.close()
+res = env.get_observations(); obs = res[0] if isinstance(res, tuple) else res
+rob, dr = [], []
+with torch.inference_mode():
+    for i in range(500):
+        obs, _, dones, _ = env.step(policy(obs))
+        rob.append(raw._robot.data.joint_pos[0].cpu().numpy().copy())
+        jp = raw._cabinet.data.joint_pos[0,0].item()
+        dr.append(jp)
+        if i % 50 == 49:
+            d = torch.norm(raw.robot_grasp_pos - raw.drawer_grasp_pos, dim=-1)[0].item()
+            fj = raw._robot.data.joint_pos[0, -2:].cpu().numpy()
+            rg = raw.robot_grasp_pos[0].cpu().numpy()
+            dg = raw.drawer_grasp_pos[0].cpu().numpy()
+            print(f'>>> step {i}: drawer={jp:.4f} graspdist={d:.4f} fingers={fj.round(4).tolist()} rg={rg.round(3).tolist()} dg={dg.round(3).tolist()}', flush=True)
+        if bool(dones[0]):
+            print(f'>>> EPISODE END at step {i} (terminated = success if drawer>0.28)', flush=True)
+            break
+print(f'>>> KITCHEN CLOSED-LOOP RESULT: MAX drawer {max(dr):.4f} m = {max(dr)/DRAWER_TRAVEL*100:.1f}% of travel', flush=True)
+np.savez(os.path.expanduser('~/rl_logs/molmo_drawer/rollout_kitchen.npz'), robot=np.array(rob), drawer=np.array(dr), names=np.array(raw._robot.joint_names))
+print('>>> saved rollout_kitchen.npz', flush=True)
 os._exit(0)

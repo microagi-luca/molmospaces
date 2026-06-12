@@ -167,3 +167,29 @@ End-to-end RL pipeline validated in Isaac Lab (5.1 venv, headless GPU PhysX, no 
 | drawer open (frac of 0.319 m travel, episode-mean) | 0.000 | 0.104 | 0.200 | 0.278 | 0.389 | **0.546** |
 
 Mean reward 663 (reach-only baseline) → **2290**. Checkpoints in `~/rl_logs/molmo_drawer/` on the VM.
+
+---
+
+## Addendum (2026-06-12): handle colliders + in-context training -> TRUE in-scene transfer
+
+The isolation->in-scene gap is CLOSED. Chain of fixes, each verified:
+
+1. **Handle colliders in the converter** (`assets/add_handle_colliders.py`, auto-run by
+   `ms-convert-houses`): the iTHOR drawer "handles" are texture-only — the visual mesh is a
+   flat plate 1cm proud of the collision face (verified vertex-by-vertex). The pass authors
+   (a) the faithful front-plate collider and (b) a synthesized graspable handle BAR
+   (16.8x2.5x3cm, centered near the top of the face) as a documented affordance.
+2. **In-context retraining** (`train_molmo_drawer.py`): frontal handle-grasp shaping
+   (grasp at the bar, fingers straddle it vertically, finger_reward restored) + a static
+   occluder plate over the drawer top that makes the old top-hook strategy impossible.
+   PPO, 2048 envs, 2000 iters (~20 min): drawer_open_frac 0 -> 0.76, reward 2922.
+3. **Closed-loop kitchen evaluation** (`eval_in_kitchen.py`): the policy runs against the
+   real FloorPlan1 drawer inside the full kitchen (InteractiveScene + our collision-group
+   fix). Gotcha found: `to_target` obs is WORLD-frame (template inheritance), so the
+   90deg-rotated kitchen was out-of-distribution -> spawn the kitchen rotated into the
+   training frame (drawer at origin, physically identical).
+   **RESULT: drawer pulled to 0.275m = 86.2% of travel, fully physically, no assist** —
+   approach -> handle grip -> pull -> hold.
+
+Artifacts: `trained/model_1999_handle.pt` (in-context policy), `trained/rollout_kitchen.npz`
+(in-kitchen closed-loop trajectory), `trained/molmo_drawer.usda` (asset with handle).
