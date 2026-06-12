@@ -44,7 +44,7 @@ FRANKA_USD = (
     "https://omniverse-content-production.s3-us-west-2.amazonaws.com"
     "/Assets/Isaac/5.1/Isaac/IsaacLab/Robots/FrankaEmika/panda_instanceable.usd"
 )
-ROLLOUT = os.path.expanduser("~/rl_logs/molmo_drawer/rollout.npz")
+ROLLOUT = os.path.expanduser(os.environ.get("ROLLOUT_NPZ", "~/rl_logs/molmo_drawer/rollout.npz"))
 KITCHEN_USD = os.path.expanduser("~/reconvert_fixed/FloorPlan1_physics/scene.usda")
 DRAWER_JOINT = "drawer_372d9ee41d70550432c30a66a6e5b331_1_1_0_joint_0"
 # kitchen-frame pose equivalent to the training-relative configuration:
@@ -114,9 +114,9 @@ for i, nm in enumerate(names):
     tok = "angular" if ang else "linear"
     d = UsdPhysics.DriveAPI.Apply(prim, tok)
     d.CreateTypeAttr("force")
-    d.CreateStiffnessAttr(2000.0 if ang else 50000.0)
-    d.CreateDampingAttr(200.0 if ang else 2000.0)
-    d.CreateMaxForceAttr(1.0e5)
+    d.CreateStiffnessAttr(8000.0 if ang else 80000.0)
+    d.CreateDampingAttr(600.0 if ang else 3000.0)
+    d.CreateMaxForceAttr(1.0e6)
     val = float(np.degrees(q0[i])) if ang else float(q0[i])
     d.CreateTargetPositionAttr(val)
     try:
@@ -146,8 +146,8 @@ if MODE == "snapshot":
     import imageio.v2 as imageio
     import omni.replicator.core as rep
 
-    cam_eye = (2.25, -0.55, 1.65) if KITCHEN else (1.7, -1.3, 1.1)
-    cam_tgt = (0.95, -2.1, 0.55) if KITCHEN else (0.15, 0.0, 0.5)
+    cam_eye = (1.85, -0.95, 1.25) if KITCHEN else (1.7, -1.3, 1.1)
+    cam_tgt = (0.95, -2.05, 0.50) if KITCHEN else (0.15, 0.0, 0.5)
     cam = rep.create.camera(position=cam_eye, look_at=cam_tgt, focal_length=18.0)
     rp = rep.create.render_product(cam, (1280, 720))
     rgb = rep.AnnotatorRegistry.get_annotator("rgb")
