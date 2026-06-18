@@ -1068,6 +1068,11 @@ def convert(scene_path: Path) -> SceneConversionResult:  # noqa: PLR0915
         else:
             usdex.core.saveStage(stage, comment="")
 
+        # add grippable collision boxes for handles (visual-only in the source assets)
+        from molmo_spaces_isaac.assets.add_handle_colliders import add_handle_colliders_to_file
+
+        add_handle_colliders_to_file(usd_path.absolute().as_posix())
+
         # usdex.core.saveStage(stage, comment="")
     except Exception as e:
         success = False

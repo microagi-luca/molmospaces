@@ -254,12 +254,31 @@ def convert_body_flatten_articulated(
     bodies_to_fix: list[tuple[str, str]],
     prefix: str = "",
     collection: Usd.CollectionAPI | None = None,
+    container: Usd.Prim | None = None,
 ) -> Usd.Prim:
     geo_scope = (
         data.content[Tokens.GEOMETRY].GetDefaultPrim().GetChild(Tokens.GEOMETRY.value).GetPrim()
     )
-    safe_name = data.name_cache.getPrimName(geo_scope, f"{prefix}{body.name}")
-    body_prim: Usd.Prim = usdex.core.defineXform(geo_scope, safe_name).GetPrim()
+
+    # On the root call, create a group Xform that holds ALL links of this articulation, and put
+    # ArticulationRootAPI on the group. PhysX builds a reduced-coordinate articulation from the
+    # rigid bodies + joints found in the SUBTREE of the prim carrying ArticulationRootAPI, so
+    # every link must live under this group (the old code flattened links as siblings of the
+    # root and put ArticulationRootAPI on an empty Xform -> no articulation was ever formed).
+    group_prim: Usd.Prim | None = None
+    if is_root:
+        group_name = data.name_cache.getPrimName(geo_scope, f"{prefix}{body.name}_art")
+        group_prim = usdex.core.defineXform(geo_scope, group_name).GetPrim()
+        group_over = data.content[Tokens.PHYSICS].OverridePrim(group_prim.GetPath())
+        _ = UsdPhysics.ArticulationRootAPI.Apply(group_over)
+        if data.use_physx:
+            group_over.AddAppliedSchema("PhysxArticulationAPI")
+        container = group_prim
+
+    assert container is not None, "articulation container must be set by the root call"
+
+    safe_name = data.name_cache.getPrimName(container, f"{prefix}{body.name}")
+    body_prim: Usd.Prim = usdex.core.defineXform(container, safe_name).GetPrim()
 
     usd_pos = Gf.Vec3d(body.pos.tolist())
     usd_quat = to_usd_quat(body.quat)
@@ -297,16 +316,27 @@ def convert_body_flatten_articulated(
     body_over = data.content[Tokens.PHYSICS].OverridePrim(body_prim.GetPath())
     data.references[Tokens.PHYSICS][body.name] = body_over
 
-    if not is_root:
-        _ = UsdPhysics.RigidBodyAPI.Apply(body_over)
-        if len(body.geoms) == 0 or all(is_visual(geom) for geom in body.geoms):
-            mass_api = UsdPhysics.MassAPI.Apply(body_over)
-            mass_api.CreateMassAttr().Set(1e-8)
+    # Every link is a rigid body, including the base (root) link. Previously the root got no
+    # RigidBodyAPI, leaving the articulation with no base link.
+    _ = UsdPhysics.RigidBodyAPI.Apply(body_over)
+    if data.use_physx:
+        body_over.AddAppliedSchema("PhysxRigidBodyAPI")
+    if len(body.geoms) == 0 or all(is_visual(geom) for geom in body.geoms):
+        mass_api = UsdPhysics.MassAPI.Apply(body_over)
+        mass_api.CreateMassAttr().Set(1e-8)
 
+    # Fix the base link to the world so the (static) furniture stays put. This makes the
+    # articulation fixed-base; only the jointed child links move.
     if is_root:
-        _ = UsdPhysics.ArticulationRootAPI.Apply(body_over)
-        if data.use_physx:
-            body_over.AddAppliedSchema("PhysxArticulationAPI")
+        fj_name = data.name_cache.getPrimName(body_prim, "FixedJointToWorld")
+        fixed_joint = UsdPhysics.FixedJoint.Define(
+            data.content[Tokens.GEOMETRY], body_prim.GetPath().AppendChild(fj_name)
+        )
+        fixed_joint.GetBody1Rel().SetTargets([body_prim.GetPath()])
+        fixed_joint.CreateLocalPos0Attr().Set(Gf.Vec3d(world_pos))
+        fixed_joint.CreateLocalRot0Attr().Set(world_quat)
+        fixed_joint.CreateLocalPos1Attr().Set(Gf.Vec3d(0, 0, 0))
+        fixed_joint.CreateLocalRot1Attr().Set(Gf.Quatf.GetIdentity())
 
     data.bodies[body.name] = BodyData(
         body_spec=body,
@@ -316,7 +346,7 @@ def convert_body_flatten_articulated(
         body_prim=body_prim,
     )
 
-    if len(body.joints) == 0:
+    if len(body.joints) == 0 and not is_root:
         bodies_to_fix.append((body.name, body.parent.name))
 
     for child_body in body.bodies:
@@ -329,6 +359,7 @@ def convert_body_flatten_articulated(
             bodies_to_fix=bodies_to_fix,
             prefix=prefix,
             collection=collection,
+            container=container,
         )
 
-    return body_prim
+    return group_prim if (is_root and group_prim is not None) else body_prim
